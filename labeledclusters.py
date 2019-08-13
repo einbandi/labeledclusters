@@ -1,7 +1,8 @@
 import numpy as np
+import pandas as pd
 from scipy.spatial.distance import cdist, pdist
 from itertools import combinations
-import clusters
+from clusters import Cluster
 
 
 def centroid_dist(a, b, metric='euclidean'):
@@ -17,108 +18,95 @@ def davies_bouldin_sim(a, b, metric='euclidean', q=2):
 
 
 def estimate_density(x, y, x0, y0, sigma):
-    
+
     xp = np.power(np.atleast_3d(x0) - x, 2)
     yp = np.power(np.atleast_3d(y0) - y, 2)
     exp = np.exp(-1 / (2*sigma) * (xp + yp))
     result = 1 / (2*np.pi*sigma) * np.sum(exp, axis=2) / len(x)
-    
+
     maxdim = max(len(np.shape(x0)), len(np.shape(y0)))
-                 
+
     funcs = {
         0: lambda z: z.item(),
         1: lambda z: z[0],
         2: lambda z: z,
     }
-    
-    return  funcs[maxdim](result)
+
+    return funcs[maxdim](result)
+
+
+def raw__data_to_table(data, labels):
+
+    num_pts, num_samples, num_dim = data.shape
+
+    ids = np.arange(num_pts).repeat(num_samples)
+    labels = labels.repeat(num_samples)
+    coords = data.reshape(-1, num_dim).transpose()
+    samples = np.tile(np.arange(num_samples), num_pts)
+
+    data_dict = {
+        'id': ids,
+        'label': labels,
+        'sample': samples
+    }
+
+    for dim, xs in enumerate(coords):
+        data_dict['x' + str(dim)] = xs
+
+    return pd.DataFrame(data=data_dict)
+
+def get_values(df):
+    return df.drop(['id', 'label', 'sample'], axis=1).values
 
 
 class LabeledSampledOutputs:
 
     """Container class for sampled neural network outputs with known class labels."""
 
-    def __init__(self, data, class_labels=None):
+    def __init__(self, data, labels):
+
+        if not isinstance(data, np.ndarray):
+            data = np.asarray(data)
+        if not isinstance(labels, np.ndarray):
+            labels = np.asarray(labels)
+
         self.data = data
-        if class_labels is None:
-            self.class_labels = [i for i in range(len(data))]
+
+        if len(labels) == len(data):
+            self.labels = labels
         else:
-            if len(class_labels) == len(data):
-                self.class_labels = class_labels
-            else:
-                print('{}::clbls: Length of label list must match length of data.'.format(
-                    self.__class__.__name__))
-
-        samples = set()
-        dims = set()
-        for label in self.data:
-            for instance in label:
-                samples.add(len(instance))
-                for sample in instance:
-                    dims.add(len(sample))
-
-        if len(samples) > 1:
-            print('{}::sampl: Number of samples must be the same for each instance.'.format(
+            print('{}::clbls: Length of label list must match length of data.'.format(
                 self.__class__.__name__))
 
-        if len(dims) > 1:
-            print('{}::dims: Number of dimensions for each sample must be the same.'.format(
-                self.__class__.__name__))
+        self.num_classes = len(set(labels))
+        self.num_samples = data.shape[1]
+        self.num_dims = data.shape[2]
 
-        self.num_classes = len(data)
-        self.num_samples = next(iter(samples))
-        self.num_dims = next(iter(dims))
+        self.df = raw__data_to_table(data, labels)
+
+    def __len__(self):
+        return len(self.data)
 
     def instances_per_class(self):
-        ipc = dict()
-        for label, instances in enumerate(self.data):
-            class_label = self.class_labels[label]
-            ipc[class_label] = len(instances)
-        return ipc
+        labels, counts = np.unique(self.labels, return_counts=True)
+        return dict(zip(labels, counts))
 
-    def convert_index(self, index):
-        ipc = self.instances_per_class()
-        if type(index) is tuple and len(index) == 2:
-            class_label, instance = index
-            result = 0
-            for i in ipc:
-                if(i != class_label):
-                    result += ipc[i]
-                else:
-                    break
-            return result + instance
-        else:
-            result = index
-            for i in ipc:
-                if(result - ipc[i] < 0):
-                    class_label = i
-                    break
-                else:
-                    result -= ipc[i]
-            return (class_label, result)
-        
     def get_class_clusters(self):
-        return [Cluster(c.reshape(-1, self.num_dims)) for c in self.data]
+        return [Cluster(get_values(self.df[self.df['label'] == label])) for label in set(self.labels)]
 
-    def get_class_cluster(self, class_label):
-        index = self.class_labels.index(class_label)
-        return Cluster(self.data[index].reshape(-1, self.num_dims))
+    def get_class_cluster(self, label):
+        return Cluster(get_values(self.df[self.df['label'] == label]))
 
-    def get_instance_cluster(self, instance_spec):
-        class_label, instance_index = instance_spec
-        class_index = self.class_labels.index(class_label)
-        return Cluster(self.data[class_index, instance_index])
+    def get_instance_cluster(self, index):
+        # alternatively simply Cluster(data[id])
+        return Cluster(get_values(self.df[self.df['id'] == index]))
 
-    def get_class_cluster_without_instance(self, instance_spec):
-        class_label, instance_index = instance_spec
-        class_index = self.class_labels.index(class_label)
-        class_cluster = self.data[class_index]
-        removed = np.delete(class_cluster, instance_index, axis=0)
-        return Cluster(removed.reshape(-1, self.num_dims))
+    def get_class_cluster_without_instance(self, index):
+        return Cluster(get_values(self.df[(self.df['label'] == self.labels[index]) & (self.df['id'] != index)]))
 
     def inter_class_mean_dist(self, class_a, class_b, metric='euclidean'):
-        a = self.get_class_cluster(class_a).numpy()
-        b = self.get_class_cluster(class_b).numpy()
+        a = self.get_class_cluster(class_a)
+        b = self.get_class_cluster(class_b)
         return mean_dist(a, b, metric=metric)
 
     def inter_class_centroid_dist(self, class_a, class_b, metric='euclidean'):
@@ -126,75 +114,81 @@ class LabeledSampledOutputs:
         b = self.get_class_cluster(class_b)
         return centroid_dist(a, b, metric=metric)
 
-    def intra_class_mean_dist(self, class_label, metric='euclidean'):
-        return self.get_class_cluster(class_label).mean_pdist(metric=metric)
+    def intra_class_mean_dist(self, label, metric='euclidean'):
+        return self.get_class_cluster(label).mean_pdist(metric=metric)
 
-    def class_diam(self, class_label, metric='euclidean'):
-        return self.get_class_cluster(class_label).max_diam(metric=metric)
+    def class_diam(self, label, metric='euclidean'):
+        return self.get_class_cluster(label).max_diam(metric=metric)
 
-    def instance_class_mean_dist(self, instance_spec, class_label, metric='euclidean'):
-        i = self.get_instance_cluster(instance_spec)
-        if instance_spec[1] == class_label:
-            c = self.get_class_cluster_without_instance(instance_spec)
+    def instance_class_mean_dist(self, index, label, metric='euclidean'):
+        i = self.get_instance_cluster(index)
+        if self.labels[index] == label:
+            c = self.get_class_cluster_without_instance(index)
         else:
-            c = self.get_class_cluster(class_label)
+            c = self.get_class_cluster(label)
         return mean_dist(i, c, metric=metric)
 
-    def instance_class_mean_dists(self, instance_spec, metric='euclidean'):
-        dists = []
-        for c in self.class_labels:
-            dists.append(self.instance_class_mean_dist(
-                instance_spec, c, metric=metric))
-        return np.asarray(dists)
+    def instance_class_mean_dists(self, index, metric='euclidean'):
+        dists = dict()
+        for c in set(self.labels):
+            dists[c] = self.instance_class_mean_dist(index, c, metric=metric)
+        return dists
 
-    def closest_class(self, instance_spec, metric='euclidean'):
-        index = np.argmin(self.instance_class_mean_dists(
-            instance_spec, metric=metric))
-        return self.class_labels[index]
+    def closest_class(self, index, metric='euclidean'):
+        dists = self.instance_class_mean_dists(index, metric=metric)
+        dists = list(dists.values())
+        index = np.argmin(dists)
+        return list(set(self.labels))[index]
 
-    def closest_class_dist(self, instance_spec, metric='euclidean'):
-        return np.min(self.instance_class_mean_dists(instance_spec, metric=metric))
-
-    def closest_other_class_dist(self, instance_spec, metric='euclidean'):
-        dists = self.instance_class_mean_dists(
-            instance_spec, metric='euclidean')
-        dists[self.class_labels.index(instance_spec[0])] = np.inf
+    def closest_class_dist(self, index, metric='euclidean'):
+        dists = self.instance_class_mean_dists(index, metric=metric)
+        dists = list(dists.values())
         return np.min(dists)
 
-    def silhouette_index(self, instance_spec, metric='euclidean'):
-        a = self.instance_class_mean_dist(
-            instance_spec, instance_spec[0], metric=metric)
-        b = self.closest_other_class_dist(instance_spec, metric=metric)
+    def closest_other_class_dist(self, index, metric='euclidean'):
+        dists = self.instance_class_mean_dists(index, metric=metric)
+        dists = list(dists.values())
+        label_index = list(set(self.labels)).index(self.labels[index])
+        dists[label_index] = np.inf
+        return np.min(dists)
+
+    def silhouette_index(self, index, metric='euclidean'):
+        a = self.instance_class_mean_dist(index, self.labels[index], metric=metric)
+        b = self.closest_other_class_dist(index, metric=metric)
         return (b-a) / np.max([a, b])
 
     def silhouette_indices(self, metric='euclidean'):
-        ipc_dict = self.instances_per_class()
-        result = []
-        for label in ipc_dict:
-            class_result = []
-            for i in range(ipc_dict[label]):
-                class_result.append(self.silhouette_index(
-                    (label, i), metric=metric))
-            result.append(class_result)
-        return result
-    
+        return np.array([self.silhouette_index(i, metric=metric) for i in range(len(self))])
+
+
     def class_overlap(self, x, y, sigma):
         if(self.num_dims != 2):
             print('Overlap currently only implemented for 2 dimensional clusters!')
             return float('nan')
-        
-        densities = [estimate_density(c.data[:,0], c.data[:,1], x, y, sigma) for c in self.get_class_clusters()]
+
+        densities = [estimate_density(
+            c.data[:, 0], c.data[:, 1], x, y, sigma) for c in self.get_class_clusters()]
         return np.product(np.asarray(list(combinations(densities, 2))), axis=1).sum(axis=0)
-    
+
+    def mean_overlap(self, index, sigma):
+        if(self.num_dims != 2):
+            print('Overlap currently only implemented for 2 dimensional clusters!')
+            return float('nan')
+
+        c = self.get_instance_cluster(index)
+        return np.mean(self.class_overlap(c.data[:, 0], c.data[:, 1], sigma))
+
     def overlap_map(self, x_range, y_range, sigma):
         if(self.num_dims != 2):
             print('Overlap map currently only implemented for 2 dimensionsl clusters!')
             return float('nan')
-        
+
         (xmin, xmax, xstep) = x_range
         (ymin, ymax, ystep) = y_range
         x_space = np.linspace(xmin, xmax, xstep)
         y_space = np.linspace(ymin, ymax, ystep)
-        x,y = np.meshgrid(x_space, y_space)
-        
+        x, y = np.meshgrid(x_space, y_space)
+
+        print(x)
+
         return self.class_overlap(x, y, sigma)
