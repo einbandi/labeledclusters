@@ -87,6 +87,15 @@ class LabeledSampledOutputs:
     def __len__(self):
         return len(self.data)
 
+    def index_dict(self):
+        indices = dict()
+        for label in list(set(self.labels)):
+            indices[label] = np.array([], dtype='int')
+        for index, label in enumerate(self.labels):
+            indices[label] = np.append(indices[label], index)
+        return indices
+        
+
     def instances_per_class(self):
         labels, counts = np.unique(self.labels, return_counts=True)
         return dict(zip(labels, counts))
@@ -180,7 +189,7 @@ class LabeledSampledOutputs:
 
     def overlap_map(self, x_range, y_range, sigma):
         if(self.num_dims != 2):
-            print('Overlap map currently only implemented for 2 dimensionsl clusters!')
+            print('Overlap map currently only implemented for 2 dimensional clusters!')
             return float('nan')
 
         (xmin, xmax, xstep) = x_range
@@ -192,3 +201,26 @@ class LabeledSampledOutputs:
         print(x)
 
         return self.class_overlap(x, y, sigma)
+
+    
+    def random_subset(self, num_samples, per_class=False, random_seed=None, return_indices=True):
+        np.random.seed(random_seed)
+
+        if per_class:
+            max_samples = np.min(list(self.instances_per_class().values()))
+            if num_samples > max_samples:
+                print('Cannot take more than {} samples per class'.format(max_samples))
+                return None
+            else:
+                indices = []
+                for i in self.index_dict().values():
+                    indices.append(np.random.choice(i, size=num_samples, replace=False))
+                indices = np.concatenate(indices)
+            
+        else:
+            indices = np.random.choice(np.arange(len(self)), size=num_samples, replace=False)
+
+        if return_indices:
+            return indices, self.data[indices]
+        else:
+            return self.data[indices]
