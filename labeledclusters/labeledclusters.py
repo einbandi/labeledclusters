@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial.distance import cdist, pdist
 from itertools import combinations
-from clusters import Cluster
+from labeledclusters.clusters import Cluster
 
 
 def centroid_dist(a, b, metric='euclidean'):

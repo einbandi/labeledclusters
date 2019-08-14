@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="labeledclusters",
-    version="0.0.2",
+    version="0.0.3",
     author="Andreas Hinterreiter",
     author_email="andreas.hinterreiter@jku.at",
     description="Python code for handling clusters of labeled, high-dimensional data",
